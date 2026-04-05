@@ -55,6 +55,7 @@
 
 当前 workflow 配置为：
 
+- 可以在 GitHub Actions 页面手动触发一次。
 - 任意分支 `push` 都会触发。
 - 以 `v` 开头的 tag 推送也会触发。
 
@@ -98,7 +99,40 @@ git push origin main
 - `sha-abc1234`
 - `latest`（仅 `main`）
 
-## 7. 常见失败点
+## 7. 手动触发一次
+
+当你不想再额外提交代码，但又想马上打一次镜像时，可以直接在 GitHub 页面手动触发：
+
+1. 打开你的仓库 GitHub 页面。
+2. 进入 `Actions`。
+3. 左侧选择 `Build and Release Multi-Platform`。
+4. 右上角点击 `Run workflow`。
+5. `Use workflow from` 选择你要打包的分支，通常选 `main`。
+6. 点击绿色的 `Run workflow` 按钮。
+7. 等待任务开始后，点进这次运行记录。
+8. 重点看 `build-docker` 任务里的这几步：
+   - `Resolve Docker image tags`
+   - `Log in to Docker Hub`
+   - `Build and Push Multi-Arch Docker Image`
+
+如果你从 `main` 手动触发，正常会推这几个标签：
+
+- `main`
+- `sha-<短哈希>`
+- `latest`
+
+如果你从其他分支手动触发，通常会推：
+
+- `<分支名>`
+- `sha-<短哈希>`
+
+如果页面里看不到 `Run workflow` 按钮，通常有 3 个原因：
+
+1. 新 workflow 还没推到 GitHub。
+2. 仓库没启用 Actions。
+3. 当前打开的不是带 `workflow_dispatch` 的那一条 workflow。
+
+## 8. 常见失败点
 
 - `unauthorized` / `requested access to the resource is denied`
   - 通常是 `DOCKER_USERNAME`、`DOCKER_PASSWORD` 或 `DOCKERHUB_IMAGE` 填错了。
@@ -109,6 +143,6 @@ git push origin main
 - 分支名里带 `/`
   - 当前 workflow 已自动把 `/` 转成 `-`，避免 Docker tag 非法。
 
-## 8. 与本次回滚的关系
+## 9. 与本次回滚的关系
 
 这份自动化配置只影响构建和推送链路，不改变应用的数据库、业务逻辑或运行时配置。即使后续你要重新修订阅问题，也不需要重新设计 Docker Hub 自动推送方案。
