@@ -281,6 +281,50 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Resolve Docker image tags
+        id: docker-meta
+        shell: bash
+        env:
+          DEFAULT_DOCKER_IMAGE: zerodeng/sublink-pro
+          CUSTOM_DOCKER_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+        run: |
+          IMAGE_NAME="$CUSTOM_DOCKER_IMAGE"
+          if [[ -z "$IMAGE_NAME" ]]; then
+            if [[ "$CURRENT_REPOSITORY" == "ZeroDeng01/sublinkPro" ]]; then
+              IMAGE_NAME="$DEFAULT_DOCKER_IMAGE"
+              echo "::warning::未配置仓库变量 DOCKERHUB_IMAGE，当前继续使用默认镜像 ${IMAGE_NAME}。"
+            else
+              echo "::error::当前仓库不是 ZeroDeng01/sublinkPro，请先配置 GitHub Actions 仓库变量 DOCKERHUB_IMAGE，例如 yourname/sublinkpro。"
+              exit 1
+            fi
+          fi
+
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          TAGS=()
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            TAGS+=("${IMAGE_NAME}:${TAG_NAME}")
+            TAGS+=("${IMAGE_NAME}:sha-${SHORT_SHA}")
+            TAGS+=("${IMAGE_NAME}:latest")
+          else
+            BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+            SAFE_BRANCH_NAME="${BRANCH_NAME//\//-}"
+            TAGS+=("${IMAGE_NAME}:${SAFE_BRANCH_NAME}")
+            TAGS+=("${IMAGE_NAME}:sha-${SHORT_SHA}")
+            if [[ "$BRANCH_NAME" == "main" ]]; then
+              TAGS+=("${IMAGE_NAME}:latest")
+            fi
+          fi
+
+          {
+            echo "image=${IMAGE_NAME}"
+            echo "tags<<EOF"
+            printf '%s\n' "${TAGS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -288,26 +332,12 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and Push Multi-Arch Docker Image
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            # 带 tag 的推送：使用 tag 版本号 + latest
-            TAG=${GITHUB_REF#refs/tags/}
-            docker buildx build --no-cache --pull --platform linux/amd64,linux/arm64 \
-              -f Dockerfile.ci \
-              -t zerodeng/sublink-pro:${TAG} \
-              -t zerodeng/sublink-pro:latest \
-              --push .
-          else
-            # 分支推送：dev 和 main 分支统一使用 dev 标签，其他分支使用分支名
-            BRANCH=${GITHUB_REF#refs/heads/}
-            if [[ "$BRANCH" == "dev" || "$BRANCH" == "main" ]]; then
-              DOCKER_TAG="dev"
-            else
-              # 将分支名中的 / 替换为 - 以兼容 Docker tag 格式
-              DOCKER_TAG=${BRANCH//\//-}
-            fi
-            docker buildx build --no-cache --pull --platform linux/amd64,linux/arm64 \
-              -f Dockerfile.ci \
-              -t zerodeng/sublink-pro:${DOCKER_TAG} \
-              --push .
-          fi
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ci
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
