@@ -47,6 +47,30 @@ func setupTemplateTestDB(t *testing.T) {
 	})
 }
 
+func setupBaseMigrationTestDB(t *testing.T) {
+	t.Helper()
+
+	oldDB := database.DB
+	oldDialect := database.Dialect
+	oldInitialized := database.IsInitialized
+
+	db, err := gorm.Open(sqlite.Open(testutil.UniqueMemoryDSN(t, "base_migration_test")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+
+	database.DB = db
+	database.Dialect = database.DialectSQLite
+	database.IsInitialized = false
+
+	t.Cleanup(func() {
+		database.DB = oldDB
+		database.Dialect = oldDialect
+		database.IsInitialized = oldInitialized
+		testutil.CloseDB(t, db)
+	})
+}
+
 func TestInferTemplateCategory(t *testing.T) {
 	tests := map[string]string{
 		"clash.yaml": "clash",
@@ -123,5 +147,33 @@ func TestMigrateTemplatesFromFilesRepairsInvalidCategory(t *testing.T) {
 	}
 	if repaired.Category != "surge" {
 		t.Fatalf("expected repaired category surge, got %q", repaired.Category)
+	}
+}
+
+func TestRunBaseTableMigrationsRecordsAndSkipsRepeat(t *testing.T) {
+	setupBaseMigrationTestDB(t)
+
+	if err := runBaseTableMigrations(database.DB); err != nil {
+		t.Fatalf("first base migration run failed: %v", err)
+	}
+
+	var firstCount int64
+	if err := database.DB.Model(&database.Migration{}).Count(&firstCount).Error; err != nil {
+		t.Fatalf("count migrations after first run: %v", err)
+	}
+	if firstCount != int64(len(baseTableMigrations)) {
+		t.Fatalf("expected %d migration records after first run, got %d", len(baseTableMigrations), firstCount)
+	}
+
+	if err := runBaseTableMigrations(database.DB); err != nil {
+		t.Fatalf("second base migration run failed: %v", err)
+	}
+
+	var secondCount int64
+	if err := database.DB.Model(&database.Migration{}).Count(&secondCount).Error; err != nil {
+		t.Fatalf("count migrations after second run: %v", err)
+	}
+	if secondCount != firstCount {
+		t.Fatalf("expected migration record count to remain %d, got %d", firstCount, secondCount)
 	}
 }

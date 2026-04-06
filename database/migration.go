@@ -10,18 +10,63 @@ type Migration struct {
 	CreatedAt time.Time
 }
 
-// RunAutoMigrate 执行自动迁移，如果 migrationID 已存在则跳过
-func RunAutoMigrate(migrationID string, dst ...interface{}) error {
-	// 确保 Migration 表存在
+func EnsureMigrationTable() error {
 	if !DB.Migrator().HasTable(&Migration{}) {
 		if err := DB.AutoMigrate(&Migration{}); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func ListMigrationIDs() (map[string]struct{}, error) {
+	if err := EnsureMigrationTable(); err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	if err := DB.Model(&Migration{}).Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		result[id] = struct{}{}
+	}
+	return result, nil
+}
+
+func HasMigration(migrationID string) (bool, error) {
+	if err := EnsureMigrationTable(); err != nil {
+		return false, err
+	}
 
 	var count int64
-	DB.Model(&Migration{}).Where("id = ?", migrationID).Count(&count)
-	if count > 0 {
+	if err := DB.Model(&Migration{}).Where("id = ?", migrationID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func RecordMigration(migrationID string) error {
+	return DB.Create(&Migration{
+		ID:        migrationID,
+		CreatedAt: time.Now(),
+	}).Error
+}
+
+// RunAutoMigrate 执行自动迁移，如果 migrationID 已存在则跳过
+func RunAutoMigrate(migrationID string, dst ...interface{}) error {
+	// 确保 Migration 表存在
+	if err := EnsureMigrationTable(); err != nil {
+		return err
+	}
+
+	exists, err := HasMigration(migrationID)
+	if err != nil {
+		return err
+	}
+	if exists {
 		// 已经执行过，跳过
 		return nil
 	}
@@ -32,24 +77,21 @@ func RunAutoMigrate(migrationID string, dst ...interface{}) error {
 	}
 
 	// 记录迁移
-	return DB.Create(&Migration{
-		ID:        migrationID,
-		CreatedAt: time.Now(),
-	}).Error
+	return RecordMigration(migrationID)
 }
 
 // RunCustomMigration 执行自定义迁移逻辑，如果 migrationID 已存在则跳过
 func RunCustomMigration(migrationID string, action func() error) error {
 	// 确保 Migration 表存在
-	if !DB.Migrator().HasTable(&Migration{}) {
-		if err := DB.AutoMigrate(&Migration{}); err != nil {
-			return err
-		}
+	if err := EnsureMigrationTable(); err != nil {
+		return err
 	}
 
-	var count int64
-	DB.Model(&Migration{}).Where("id = ?", migrationID).Count(&count)
-	if count > 0 {
+	exists, err := HasMigration(migrationID)
+	if err != nil {
+		return err
+	}
+	if exists {
 		// 已经执行过，跳过
 		return nil
 	}
@@ -61,8 +103,5 @@ func RunCustomMigration(migrationID string, action func() error) error {
 	}
 
 	// 记录迁移
-	return DB.Create(&Migration{
-		ID:        migrationID,
-		CreatedAt: time.Now(),
-	}).Error
+	return RecordMigration(migrationID)
 }

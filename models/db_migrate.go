@@ -15,11 +15,71 @@ import (
 	"gorm.io/gorm"
 )
 
+type baseTableMigration struct {
+	name        string
+	migrationID string
+	model       interface{}
+}
+
+var baseTableMigrations = []baseTableMigration{
+	{name: "User", migrationID: "base_table_user_v1", model: &User{}},
+	{name: "MFALoginChallenge", migrationID: "base_table_mfa_login_challenge_v1", model: &MFALoginChallenge{}},
+	{name: "Subcription", migrationID: "base_table_subcription_v1", model: &Subcription{}},
+	{name: "Node", migrationID: "base_table_node_v1", model: &Node{}},
+	{name: "SubLogs", migrationID: "base_table_sub_logs_v1", model: &SubLogs{}},
+	{name: "AccessKey", migrationID: "base_table_access_key_v1", model: &AccessKey{}},
+	{name: "SystemSetting", migrationID: "base_table_system_setting_v1", model: &SystemSetting{}},
+	{name: "Webhook", migrationID: "base_table_webhook_v1", model: &Webhook{}},
+	{name: "Script", migrationID: "base_table_script_v1", model: &Script{}},
+	{name: "SubcriptionGroup", migrationID: "base_table_subcription_group_v1", model: &SubcriptionGroup{}},
+	{name: "SubcriptionScript", migrationID: "base_table_subcription_script_v1", model: &SubcriptionScript{}},
+	{name: "Template", migrationID: "base_table_template_v1", model: &Template{}},
+	{name: "Tag", migrationID: "base_table_tag_v1", model: &Tag{}},
+	{name: "TagRule", migrationID: "base_table_tag_rule_v1", model: &TagRule{}},
+	{name: "Task", migrationID: "base_table_task_v1", model: &Task{}},
+	{name: "IPInfo", migrationID: "base_table_ip_info_v1", model: &IPInfo{}},
+	{name: "Host", migrationID: "base_table_host_v1", model: &Host{}},
+	{name: "SubscriptionShare", migrationID: "base_table_subscription_share_v1", model: &SubscriptionShare{}},
+	{name: "SubscriptionChainRule", migrationID: "base_table_subscription_chain_rule_v1", model: &SubscriptionChainRule{}},
+	{name: "Airport", migrationID: "base_table_airport_v1", model: &Airport{}},
+	{name: "GroupAirportSort", migrationID: "base_table_group_airport_sort_v1", model: &GroupAirportSort{}},
+	{name: "NodeCheckProfile", migrationID: "base_table_node_check_profile_v1", model: &NodeCheckProfile{}},
+}
+
 // md5Hash 生成MD5哈希值（用于迁移老链接）
 func md5Hash(src string) string {
 	m := md5.New()
 	m.Write([]byte(src))
 	return hex.EncodeToString(m.Sum(nil))
+}
+
+func runBaseTableMigrations(db *gorm.DB) error {
+	if err := database.EnsureMigrationTable(); err != nil {
+		return fmt.Errorf("初始化 migration 表失败: %w", err)
+	}
+
+	executed, err := database.ListMigrationIDs()
+	if err != nil {
+		return fmt.Errorf("读取 migration 记录失败: %w", err)
+	}
+
+	for _, table := range baseTableMigrations {
+		if _, ok := executed[table.migrationID]; ok {
+			continue
+		}
+
+		utils.Info("执行基础数据表迁移：%s", table.name)
+		if err := db.AutoMigrate(table.model); err != nil {
+			utils.Error("基础数据表%s迁移失败: %v", table.name, err)
+			return fmt.Errorf("基础数据表%s迁移失败: %w", table.name, err)
+		}
+		if err := database.RecordMigration(table.migrationID); err != nil {
+			return fmt.Errorf("记录基础数据表%s迁移失败: %w", table.name, err)
+		}
+		utils.Info("基础数据表%s迁移完成", table.name)
+	}
+
+	return nil
 }
 
 // RunMigrations 执行所有数据库迁移
@@ -36,40 +96,8 @@ func RunMigrations() error {
 		return nil
 	}
 
-	baseTables := []struct {
-		name  string
-		model interface{}
-	}{
-		{name: "User", model: &User{}},
-		{name: "MFALoginChallenge", model: &MFALoginChallenge{}},
-		{name: "Subcription", model: &Subcription{}},
-		{name: "Node", model: &Node{}},
-		{name: "SubLogs", model: &SubLogs{}},
-		{name: "AccessKey", model: &AccessKey{}},
-		{name: "SystemSetting", model: &SystemSetting{}},
-		{name: "Webhook", model: &Webhook{}},
-		{name: "Script", model: &Script{}},
-		{name: "SubcriptionGroup", model: &SubcriptionGroup{}},
-		{name: "SubcriptionScript", model: &SubcriptionScript{}},
-		{name: "Template", model: &Template{}},
-		{name: "Tag", model: &Tag{}},
-		{name: "TagRule", model: &TagRule{}},
-		{name: "Task", model: &Task{}},
-		{name: "IPInfo", model: &IPInfo{}},
-		{name: "Host", model: &Host{}},
-		{name: "SubscriptionShare", model: &SubscriptionShare{}},
-		{name: "SubscriptionChainRule", model: &SubscriptionChainRule{}},
-		{name: "Airport", model: &Airport{}},
-		{name: "GroupAirportSort", model: &GroupAirportSort{}},
-		{name: "NodeCheckProfile", model: &NodeCheckProfile{}},
-	}
-
-	for _, table := range baseTables {
-		if err := db.AutoMigrate(table.model); err != nil {
-			utils.Error("基础数据表%s迁移失败: %v", table.name, err)
-			return fmt.Errorf("基础数据表%s迁移失败: %w", table.name, err)
-		}
-		utils.Info("数据表%s创建成功", table.name)
+	if err := runBaseTableMigrations(db); err != nil {
+		return err
 	}
 
 	if err := database.RunCustomMigration("0027_add_user_pending_mfa_columns", func() error {
