@@ -54,6 +54,8 @@ import {
 
 // ==============================|| 订阅管理 ||============================== //
 
+const uniqueNumberList = (values = []) => Array.from(new Set((values || []).filter((value) => Number.isInteger(value))));
+
 export default function SubscriptionList() {
   const theme = useTheme();
   const matchDownMd = useMediaQuery(theme.breakpoints.down('md'));
@@ -96,6 +98,7 @@ export default function SubscriptionList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isEdit, setIsEdit] = useState(false);
   const [currentSub, setCurrentSub] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   // 表单数据
   const [formData, setFormData] = useState({
@@ -441,12 +444,15 @@ export default function SubscriptionList() {
   };
 
   const handleSubmit = async () => {
+    if (submitting) return;
     if (!formData.name.trim()) {
       showMessage('请输入订阅名称', 'warning');
       return;
     }
 
+    setSubmitting(true);
     try {
+      const uniqueSelectedNodes = uniqueNumberList(formData.selectedNodes);
       const config = JSON.stringify({
         clash: formData.clash,
         surge: formData.surge,
@@ -489,13 +495,13 @@ export default function SubscriptionList() {
       };
 
       if (formData.selectionMode === 'nodes') {
-        requestData.nodeIds = formData.selectedNodes.join(',');
+        requestData.nodeIds = uniqueSelectedNodes.join(',');
         requestData.groups = '';
       } else if (formData.selectionMode === 'groups') {
         requestData.nodeIds = '';
         requestData.groups = formData.selectedGroups.join(',');
       } else {
-        requestData.nodeIds = formData.selectedNodes.join(',');
+        requestData.nodeIds = uniqueSelectedNodes.join(',');
         requestData.groups = formData.selectedGroups.join(',');
       }
 
@@ -512,12 +518,14 @@ export default function SubscriptionList() {
     } catch (error) {
       console.error(error);
       showMessage(error.message || (isEdit ? '更新失败' : '添加失败'), 'error');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   // 节点选择操作（使用 node.ID）
   const handleAddNode = (nodeId) => {
-    setFormData({ ...formData, selectedNodes: [...formData.selectedNodes, nodeId] });
+    setFormData({ ...formData, selectedNodes: uniqueNumberList([...formData.selectedNodes, nodeId]) });
     setCheckedAvailable(checkedAvailable.filter((id) => id !== nodeId));
   };
 
@@ -552,7 +560,7 @@ export default function SubscriptionList() {
   }, [filteredNodes, formData.selectedNodes]);
 
   const handleAddAllVisible = () => {
-    const newNodes = [...formData.selectedNodes, ...availableNodes.map((n) => n.ID)];
+    const newNodes = uniqueNumberList([...formData.selectedNodes, ...availableNodes.map((n) => n.ID)]);
     setFormData({ ...formData, selectedNodes: newNodes });
     setCheckedAvailable([]);
   };
@@ -580,7 +588,7 @@ export default function SubscriptionList() {
   };
 
   const handleAddChecked = () => {
-    const newNodes = [...formData.selectedNodes, ...checkedAvailable];
+    const newNodes = uniqueNumberList([...formData.selectedNodes, ...checkedAvailable]);
     setFormData({ ...formData, selectedNodes: newNodes });
     setCheckedAvailable([]);
   };
@@ -1020,6 +1028,7 @@ export default function SubscriptionList() {
         setNamingMode={setNamingMode}
         onClose={() => setDialogOpen(false)}
         onSubmit={handleSubmit}
+        submitting={submitting}
         onAddNode={handleAddNode}
         onRemoveNode={handleRemoveNode}
         onAddAllVisible={handleAddAllVisible}

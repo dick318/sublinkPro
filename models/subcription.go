@@ -103,6 +103,51 @@ type NodeWithSort struct {
 	Sort int `json:"Sort"`
 }
 
+func uniqueNodesForSubscriptionRelation(nodes []Node) []Node {
+	result := make([]Node, 0, len(nodes))
+	seen := make(map[int]struct{})
+	for _, node := range nodes {
+		if node.ID <= 0 {
+			continue
+		}
+		if _, exists := seen[node.ID]; exists {
+			continue
+		}
+		seen[node.ID] = struct{}{}
+		result = append(result, node)
+	}
+	return result
+}
+
+func buildSubscriptionNodeRelations(subscriptionID int, nodes []Node) []SubcriptionNode {
+	uniqueNodes := uniqueNodesForSubscriptionRelation(nodes)
+	relations := make([]SubcriptionNode, 0, len(uniqueNodes))
+	for i, node := range uniqueNodes {
+		relations = append(relations, SubcriptionNode{
+			SubcriptionID: subscriptionID,
+			NodeID:        node.ID,
+			Sort:          i,
+		})
+	}
+	return relations
+}
+
+func insertSubscriptionNodeRelations(db *gorm.DB, subscriptionID int, nodes []Node) error {
+	relations := buildSubscriptionNodeRelations(subscriptionID, nodes)
+	if len(relations) == 0 {
+		return nil
+	}
+	return db.Create(&relations).Error
+}
+
+func isSubscriptionOutputNameDedupEnabled() bool {
+	value, err := GetSetting("subscription_output_name_dedup_enabled")
+	if err != nil {
+		return false
+	}
+	return value == "true"
+}
+
 // InitSubcriptionCache 初始化订阅缓存
 func InitSubcriptionCache() error {
 	utils.Info("开始加载订阅到缓存")
@@ -130,18 +175,7 @@ func (sub *Subcription) Add() error {
 
 // 添加节点列表建立多对多关系（使用节点 ID）
 func (sub *Subcription) AddNode() error {
-	// 手动插入中间表记录，使用节点 ID
-	for i, node := range sub.Nodes {
-		subNode := SubcriptionNode{
-			SubcriptionID: sub.ID,
-			NodeID:        node.ID,
-			Sort:          i, // 按添加顺序设置排序
-		}
-		if err := database.DB.Create(&subNode).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	return insertSubscriptionNodeRelations(database.DB, sub.ID, sub.Nodes)
 }
 
 // 添加分组列表建立关系
@@ -229,18 +263,7 @@ func (sub *Subcription) UpdateNodes() error {
 	if err := database.DB.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionNode{}).Error; err != nil {
 		return err
 	}
-	// 再添加新的关联
-	for i, node := range sub.Nodes {
-		subNode := SubcriptionNode{
-			SubcriptionID: sub.ID,
-			NodeID:        node.ID,
-			Sort:          i, // 按添加顺序设置排序
-		}
-		if err := database.DB.Create(&subNode).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	return insertSubscriptionNodeRelations(database.DB, sub.ID, sub.Nodes)
 }
 
 // 更新分组列表
@@ -658,7 +681,8 @@ func (sub *Subcription) GetSub(clientType string) error {
 	}
 
 	// 按排序后的顺序构建最终节点列表
-	nodeMap := make(map[string]bool) // 用于去重
+	deduplicateByName := isSubscriptionOutputNameDedupEnabled()
+	nodeMap := make(map[string]bool)
 	sub.Nodes = make([]Node, 0)
 
 	for _, item := range mixedItems {
@@ -666,17 +690,21 @@ func (sub *Subcription) GetSub(clientType string) error {
 			// 添加分组中的所有节点
 			if nodes, exists := groupNodeMap[item.Group]; exists {
 				for _, node := range nodes {
-					if !nodeMap[node.Name] {
+					if !deduplicateByName || !nodeMap[node.Name] {
 						sub.Nodes = append(sub.Nodes, node)
-						nodeMap[node.Name] = true
+						if deduplicateByName {
+							nodeMap[node.Name] = true
+						}
 					}
 				}
 			}
 		} else {
 			// 添加单个节点
-			if item.Node != nil && !nodeMap[item.Node.Name] {
+			if item.Node != nil && (!deduplicateByName || !nodeMap[item.Node.Name]) {
 				sub.Nodes = append(sub.Nodes, *item.Node)
-				nodeMap[item.Node.Name] = true
+				if deduplicateByName {
+					nodeMap[item.Node.Name] = true
+				}
 			}
 		}
 	}
@@ -883,33 +911,56 @@ func (sub *Subcription) IPlogUpdate() error {
 
 // 删除订阅（硬删除，Write-Through）
 func (sub *Subcription) Del() error {
-	// 先删除关联的节点关系
-	if err := database.DB.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionNode{}).Error; err != nil {
+	subLogs := GetSubLogsBySubcriptionID(sub.ID)
+	shares := GetSharesBySubscriptionID(sub.ID)
+	chainRules := GetChainRulesBySubscriptionID(sub.ID)
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	if err := tx.Where("subcription_id = ?", sub.ID).Delete(&SubLogs{}).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	// 删除关联的分组关系
-	if err := database.DB.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionGroup{}).Error; err != nil {
+	if err := tx.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionNode{}).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	// 删除关联的脚本关系
-	if err := database.DB.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionScript{}).Error; err != nil {
+	if err := tx.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionGroup{}).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	// 删除关联的订阅分享
-	if err := database.DB.Where("subscription_id = ?", sub.ID).Delete(&SubscriptionShare{}).Error; err != nil {
+	if err := tx.Where("subcription_id = ?", sub.ID).Delete(&SubcriptionScript{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Where("subscription_id = ?", sub.ID).Delete(&SubscriptionShare{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Where("subscription_id = ?", sub.ID).Delete(&SubscriptionChainRule{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Unscoped().Delete(sub).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
 		return err
 	}
 
-	// 删除关联的链式代理规则
-	if err := DeleteChainRulesBySubscriptionID(sub.ID); err != nil {
-		return err
+	for _, log := range subLogs {
+		subLogsCache.Delete(log.ID)
 	}
-	// 硬删除订阅本身（Unscoped 绕过软删除）
-	err := database.DB.Unscoped().Delete(sub).Error
-	if err != nil {
-		return err
+	for _, share := range shares {
+		subscriptionShareCache.Delete(share.ID)
 	}
-	// 从缓存中删除
+	for _, rule := range chainRules {
+		chainRuleCache.Delete(rule.ID)
+	}
 	subcriptionCache.Delete(sub.ID)
 	return nil
 }

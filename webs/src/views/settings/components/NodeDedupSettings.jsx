@@ -22,6 +22,7 @@ import { getNodeDedupConfig, updateNodeDedupConfig } from 'api/settings';
 
 export default function NodeDedupSettings({ showMessage }) {
   const [crossAirportDedupEnabled, setCrossAirportDedupEnabled] = useState(true);
+  const [subscriptionOutputDedupEnabled, setSubscriptionOutputDedupEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -33,6 +34,7 @@ export default function NodeDedupSettings({ showMessage }) {
       const res = await getNodeDedupConfig();
       if (res.data) {
         setCrossAirportDedupEnabled(res.data.crossAirportDedupEnabled !== false);
+        setSubscriptionOutputDedupEnabled(res.data.subscriptionOutputDedupEnabled === true);
       }
     } catch (error) {
       console.error('获取节点去重配置失败:', error);
@@ -42,7 +44,7 @@ export default function NodeDedupSettings({ showMessage }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateNodeDedupConfig({ crossAirportDedupEnabled });
+      await updateNodeDedupConfig({ crossAirportDedupEnabled, subscriptionOutputDedupEnabled });
       showMessage('节点去重设置保存成功');
     } catch (error) {
       console.error('保存失败:', error);
@@ -54,9 +56,9 @@ export default function NodeDedupSettings({ showMessage }) {
 
   return (
     <Card variant="outlined">
-      <CardHeader avatar={<FilterAltIcon color="primary" />} title="跨机场节点去重" subheader="控制不同机场之间是否进行节点内容去重" />
+      <CardHeader avatar={<FilterAltIcon color="primary" />} title="节点去重" subheader="分别控制节点入库阶段和订阅输出阶段的去重行为" />
       <CardContent>
-        <Stack spacing={2}>
+        <Stack spacing={3}>
           <FormControlLabel
             control={<Switch checked={crossAirportDedupEnabled} onChange={(e) => setCrossAirportDedupEnabled(e.target.checked)} />}
             label="启用跨机场去重"
@@ -71,6 +73,25 @@ export default function NodeDedupSettings({ showMessage }) {
                 <>
                   当前为<strong>关闭</strong>状态：每个机场独立保留自己的节点，即使不同机场存在配置完全相同的节点也会各自入库。
                   同一机场内的重复节点仍然会被去重。
+                </>
+              )}
+            </Typography>
+          </Alert>
+          <FormControlLabel
+            control={
+              <Switch checked={subscriptionOutputDedupEnabled} onChange={(e) => setSubscriptionOutputDedupEnabled(e.target.checked)} />
+            }
+            label="订阅输出时按节点名称去重"
+          />
+          <Alert severity={subscriptionOutputDedupEnabled ? 'warning' : 'info'} variant="standard">
+            <Typography variant="body2">
+              {subscriptionOutputDedupEnabled ? (
+                <>
+                  当前为<strong>开启</strong>状态：生成订阅时，同名节点只保留第一条，适合对重名较敏感的客户端。
+                </>
+              ) : (
+                <>
+                  当前为<strong>关闭</strong>状态：生成订阅时不会仅因节点名称相同就去重。即使来自不同机场或同一机场不同账号的节点重名，也会一起保留。
                 </>
               )}
             </Typography>

@@ -158,6 +158,7 @@ export default function SubscriptionFormDialog({
   // 操作回调
   onClose,
   onSubmit,
+  submitting = false,
   onPreview,
   showPreview = false,
   previewLoading,
@@ -1123,9 +1124,11 @@ export default function SubscriptionFormDialog({
             </Button>
           )}
           <Stack direction="row" spacing={1}>
-            <Button onClick={onClose}>关闭</Button>
-            <Button variant="contained" onClick={onSubmit}>
-              确定
+            <Button onClick={onClose} disabled={submitting}>
+              关闭
+            </Button>
+            <Button variant="contained" onClick={onSubmit} disabled={submitting}>
+              {submitting ? '保存中...' : '确定'}
             </Button>
           </Stack>
         </Stack>

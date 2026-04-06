@@ -52,6 +52,77 @@ func parseUnlockRulesFromForm(raw string, provider string, status string, keywor
 	return models.BuildUnlockFilterRulesJSON(rules)
 }
 
+func parseUniqueIntValues(raw string) []int {
+	if strings.TrimSpace(raw) == "" {
+		return []int{}
+	}
+
+	result := make([]int, 0)
+	seen := make(map[int]struct{})
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		id, err := strconv.Atoi(item)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func parseUniqueStringValues(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+
+	result := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+func loadSubscriptionNodesByIDs(raw string) ([]models.Node, error) {
+	ids := parseUniqueIntValues(raw)
+	if len(ids) == 0 {
+		return []models.Node{}, nil
+	}
+
+	nodes, err := models.GetNodesByIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	nodeByID := make(map[int]models.Node, len(nodes))
+	for _, node := range nodes {
+		nodeByID[node.ID] = node
+	}
+
+	result := make([]models.Node, 0, len(ids))
+	for _, id := range ids {
+		if node, ok := nodeByID[id]; ok {
+			result = append(result, node)
+		}
+	}
+	return result, nil
+}
+
 func SubTotal(c *gin.Context) {
 	var Sub models.Subcription
 	subs, err := Sub.List()
@@ -186,28 +257,12 @@ func SubAdd(c *gin.Context) {
 
 	sub.Nodes = []models.Node{}
 	if nodeIds != "" {
-		nodeNameSet := make(map[string]bool) // 按节点名称去重（Clash等客户端不支持重名节点）
-		for _, v := range strings.Split(nodeIds, ",") {
-			v = strings.TrimSpace(v)
-			if v == "" {
-				continue
-			}
-			id, err := strconv.Atoi(v)
-			if err != nil {
-				continue
-			}
-			var node models.Node
-			node.ID = id
-			err = node.GetByID() // 直接用ID获取节点
-			if err != nil {
-				continue
-			}
-			// 按节点名称去重，同名节点只保留第一个
-			if !nodeNameSet[node.Name] {
-				nodeNameSet[node.Name] = true
-				sub.Nodes = append(sub.Nodes, node)
-			}
+		loadedNodes, err := loadSubscriptionNodesByIDs(nodeIds)
+		if err != nil {
+			utils.FailWithMsg(c, "读取节点失败: "+err.Error())
+			return
 		}
+		sub.Nodes = loadedNodes
 	}
 
 	sub.Config = config
@@ -258,7 +313,7 @@ func SubAdd(c *gin.Context) {
 
 	// 添加分组关系
 	if groups != "" {
-		err = sub.AddGroups(strings.Split(groups, ","))
+		err = sub.AddGroups(parseUniqueStringValues(groups))
 		if err != nil {
 			utils.FailWithMsg(c, err.Error())
 			return
@@ -267,13 +322,7 @@ func SubAdd(c *gin.Context) {
 
 	// 添加脚本关系
 	if scripts != "" {
-		scriptIDs := make([]int, 0)
-		for _, s := range strings.Split(scripts, ",") {
-			id, err := strconv.Atoi(s)
-			if err == nil {
-				scriptIDs = append(scriptIDs, id)
-			}
-		}
+		scriptIDs := parseUniqueIntValues(scripts)
 		if len(scriptIDs) > 0 {
 			err = sub.AddScripts(scriptIDs)
 			if err != nil {
@@ -380,28 +429,12 @@ func SubUpdate(c *gin.Context) {
 	sub.CreateDate = time.Now().Format("2006-01-02 15:04:05")
 	sub.Nodes = []models.Node{}
 	if nodeIds != "" {
-		nodeNameSet := make(map[string]bool) // 按节点名称去重（Clash等客户端不支持重名节点）
-		for _, v := range strings.Split(nodeIds, ",") {
-			v = strings.TrimSpace(v)
-			if v == "" {
-				continue
-			}
-			id, err := strconv.Atoi(v)
-			if err != nil {
-				continue
-			}
-			var node models.Node
-			node.ID = id
-			err = node.GetByID() // 直接用ID获取节点
-			if err != nil {
-				continue
-			}
-			// 按节点名称去重，同名节点只保留第一个
-			if !nodeNameSet[node.Name] {
-				nodeNameSet[node.Name] = true
-				sub.Nodes = append(sub.Nodes, node)
-			}
+		loadedNodes, err := loadSubscriptionNodesByIDs(nodeIds)
+		if err != nil {
+			utils.FailWithMsg(c, "读取节点失败: "+err.Error())
+			return
 		}
+		sub.Nodes = loadedNodes
 	}
 	sub.IPWhitelist = ipWhitelist
 	sub.IPBlacklist = ipBlacklist
@@ -445,7 +478,7 @@ func SubUpdate(c *gin.Context) {
 
 	// 更新分组关系
 	if groups != "" {
-		err = sub.UpdateGroups(strings.Split(groups, ","))
+		err = sub.UpdateGroups(parseUniqueStringValues(groups))
 	} else {
 		err = sub.UpdateGroups([]string{})
 	}
@@ -456,13 +489,7 @@ func SubUpdate(c *gin.Context) {
 
 	// 更新脚本关系
 	if scripts != "" {
-		scriptIDs := make([]int, 0)
-		for _, s := range strings.Split(scripts, ",") {
-			id, err := strconv.Atoi(s)
-			if err == nil {
-				scriptIDs = append(scriptIDs, id)
-			}
-		}
+		scriptIDs := parseUniqueIntValues(scripts)
 		err = sub.UpdateScripts(scriptIDs)
 	} else {
 		err = sub.UpdateScripts([]int{})

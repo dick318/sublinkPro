@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"sublink/models"
 	"sublink/services/notifications"
 	"sublink/services/telegram"
 	"testing"
@@ -84,5 +85,61 @@ func TestUpdateTelegramConfigPersistsSettingsAndEvents(t *testing.T) {
 	}
 	if len(config.EventKeys) != 2 {
 		t.Fatalf("expected 2 selected telegram events, got %d", len(config.EventKeys))
+	}
+}
+
+func TestGetNodeDedupConfigReturnsSubscriptionOutputFlagDisabledByDefault(t *testing.T) {
+	setupSettingAPITestDB(t)
+
+	recorder := performJSONRequest(t, GetNodeDedupConfig, http.MethodGet, nil)
+	response := decodeAPIResponse(t, recorder)
+	if response.Code != 200 {
+		t.Fatalf("expected response code 200, got %d", response.Code)
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(response.Data, &data); err != nil {
+		t.Fatalf("unmarshal node dedup config: %v", err)
+	}
+
+	if crossAirport, ok := data["crossAirportDedupEnabled"].(bool); !ok || !crossAirport {
+		t.Fatalf("expected crossAirportDedupEnabled=true by default, got %#v", data["crossAirportDedupEnabled"])
+	}
+
+	value, exists := data["subscriptionOutputDedupEnabled"]
+	if !exists {
+		t.Fatalf("expected subscriptionOutputDedupEnabled field to exist")
+	}
+	if enabled, ok := value.(bool); !ok || enabled {
+		t.Fatalf("expected subscriptionOutputDedupEnabled=false by default, got %#v", value)
+	}
+}
+
+func TestUpdateNodeDedupConfigPersistsSubscriptionOutputFlag(t *testing.T) {
+	setupSettingAPITestDB(t)
+
+	recorder := performJSONRequest(t, UpdateNodeDedupConfig, http.MethodPost, map[string]interface{}{
+		"crossAirportDedupEnabled":       false,
+		"subscriptionOutputDedupEnabled": true,
+	})
+	response := decodeAPIResponse(t, recorder)
+	if response.Code != 200 {
+		t.Fatalf("expected response code 200, got %d", response.Code)
+	}
+
+	crossAirportDedup, err := models.GetSetting("cross_airport_dedup_enabled")
+	if err != nil {
+		t.Fatalf("get cross_airport_dedup_enabled: %v", err)
+	}
+	if crossAirportDedup != "false" {
+		t.Fatalf("expected cross_airport_dedup_enabled=false, got %q", crossAirportDedup)
+	}
+
+	subscriptionOutputDedup, err := models.GetSetting("subscription_output_name_dedup_enabled")
+	if err != nil {
+		t.Fatalf("get subscription_output_name_dedup_enabled: %v", err)
+	}
+	if subscriptionOutputDedup != "true" {
+		t.Fatalf("expected subscription_output_name_dedup_enabled=true, got %q", subscriptionOutputDedup)
 	}
 }

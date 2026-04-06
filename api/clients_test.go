@@ -3,7 +3,9 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -178,6 +180,19 @@ func performClientRequest(t *testing.T, method, path string) *httptest.ResponseR
 	return recorder
 }
 
+func performSubFormRequest(t *testing.T, handler gin.HandlerFunc, path string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	context.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	handler(context)
+	return recorder
+}
+
 func TestGetClientConcurrentRequestsKeepSubscriptionScoped(t *testing.T) {
 	setupClientsAPITestDB(t)
 	clashTemplatePath := writeTestClashTemplate(t)
@@ -273,6 +288,80 @@ func TestGetClientConcurrentRequestsKeepSubscriptionScoped(t *testing.T) {
 	}
 	if callCount != 2 {
 		t.Fatalf("expected two hook invocations, got %d", callCount)
+	}
+}
+
+func TestSubAddKeepsDistinctSameNameNodesAndDedupesRepeatedIDs(t *testing.T) {
+	setupClientsAPITestDB(t)
+
+	nodes := []models.Node{
+		{
+			Name:     "同名节点",
+			LinkName: "same-name-a",
+			Link:     "ss://YWVzLTEyOC1nY206cGFzc0BleGFtcGxlLmNvbTo0NDM=#same-a",
+			Protocol: "ss",
+			Source:   "manual",
+		},
+		{
+			Name:     "同名节点",
+			LinkName: "same-name-b",
+			Link:     "ss://YWVzLTEyOC1nY206cGFzc0IxQGV4YW1wbGUuY29tOjQ0Mw==#same-b",
+			Protocol: "ss",
+			Source:   "manual",
+		},
+		{
+			Name:     "唯一节点",
+			LinkName: "unique-c",
+			Link:     "ss://YWVzLTEyOC1nY206cGFzc0MyQGV4YW1wbGUuY29tOjQ0Mw==#unique-c",
+			Protocol: "ss",
+			Source:   "manual",
+		},
+	}
+
+	for i := range nodes {
+		if err := nodes[i].Add(); err != nil {
+			t.Fatalf("add node %d: %v", i, err)
+		}
+	}
+
+	recorder := performSubFormRequest(t, SubAdd, "/api/v1/subcription/add", url.Values{
+		"name":   {"手动订阅"},
+		"config": {`{"clash":"","surge":""}`},
+		"nodeIds": {strings.Join([]string{
+			strconv.Itoa(nodes[1].ID),
+			strconv.Itoa(nodes[0].ID),
+			strconv.Itoa(nodes[0].ID),
+			strconv.Itoa(nodes[2].ID),
+		}, ",")},
+		"groups":  {""},
+		"scripts": {""},
+	})
+	response := decodeAPIResponse(t, recorder)
+	if response.Code != 200 {
+		t.Fatalf("expected response code 200, got %d with msg %s", response.Code, response.Msg)
+	}
+
+	var sub models.Subcription
+	sub.Name = "手动订阅"
+	if err := sub.Find(); err != nil {
+		t.Fatalf("find created subscription: %v", err)
+	}
+
+	var relations []models.SubcriptionNode
+	if err := database.DB.Where("subcription_id = ?", sub.ID).Order("sort asc").Find(&relations).Error; err != nil {
+		t.Fatalf("load subcription nodes: %v", err)
+	}
+
+	if len(relations) != 3 {
+		t.Fatalf("expected 3 unique node relations, got %d", len(relations))
+	}
+
+	got := []int{relations[0].NodeID, relations[1].NodeID, relations[2].NodeID}
+	want := []int{nodes[1].ID, nodes[0].ID, nodes[2].ID}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected node order %v, got %v", want, got)
+		}
 	}
 }
 

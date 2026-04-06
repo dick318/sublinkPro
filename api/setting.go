@@ -68,31 +68,46 @@ func UpdateSystemDomain(c *gin.Context) {
 // GetNodeDedupConfig 获取节点去重配置
 func GetNodeDedupConfig(c *gin.Context) {
 	crossAirportDedup, _ := models.GetSetting("cross_airport_dedup_enabled")
+	subscriptionOutputDedup, _ := models.GetSetting("subscription_output_name_dedup_enabled")
 	utils.OkDetailed(c, "获取成功", gin.H{
-		"crossAirportDedupEnabled": crossAirportDedup != "false",
+		"crossAirportDedupEnabled":       crossAirportDedup != "false",
+		"subscriptionOutputDedupEnabled": subscriptionOutputDedup == "true",
 	})
 }
 
 // UpdateNodeDedupConfig 更新节点去重配置
 func UpdateNodeDedupConfig(c *gin.Context) {
 	var req struct {
-		CrossAirportDedupEnabled *bool `json:"crossAirportDedupEnabled"`
+		CrossAirportDedupEnabled       *bool `json:"crossAirportDedupEnabled"`
+		SubscriptionOutputDedupEnabled *bool `json:"subscriptionOutputDedupEnabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.FailWithMsg(c, "参数错误")
 		return
 	}
-	if req.CrossAirportDedupEnabled == nil {
-		utils.FailWithMsg(c, "缺少必填字段 crossAirportDedupEnabled")
+	if req.CrossAirportDedupEnabled == nil && req.SubscriptionOutputDedupEnabled == nil {
+		utils.FailWithMsg(c, "至少需要提供一个去重配置字段")
 		return
 	}
-	value := "true"
-	if !*req.CrossAirportDedupEnabled {
-		value = "false"
+	if req.CrossAirportDedupEnabled != nil {
+		value := "true"
+		if !*req.CrossAirportDedupEnabled {
+			value = "false"
+		}
+		if err := models.SetSetting("cross_airport_dedup_enabled", value); err != nil {
+			utils.FailWithMsg(c, "保存失败: "+err.Error())
+			return
+		}
 	}
-	if err := models.SetSetting("cross_airport_dedup_enabled", value); err != nil {
-		utils.FailWithMsg(c, "保存失败: "+err.Error())
-		return
+	if req.SubscriptionOutputDedupEnabled != nil {
+		value := "false"
+		if *req.SubscriptionOutputDedupEnabled {
+			value = "true"
+		}
+		if err := models.SetSetting("subscription_output_name_dedup_enabled", value); err != nil {
+			utils.FailWithMsg(c, "保存失败: "+err.Error())
+			return
+		}
 	}
 	utils.OkWithMsg(c, "保存成功")
 }
